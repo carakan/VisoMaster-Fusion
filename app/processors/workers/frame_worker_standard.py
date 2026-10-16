@@ -1,5 +1,6 @@
 import math
 import threading
+import traceback
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -698,6 +699,10 @@ class StandardProcessor:
                             print(
                                 f"[ERROR] Standard mode swap_core failed for a face: {e}"
                             )
+                            # The message alone rarely says which call
+                            # failed -- it names the backend error, which is
+                            # several frames below the real culprit.
+                            traceback.print_exc()
                             continue
 
         # Undo Rotation / Scaling
