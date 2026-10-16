@@ -160,7 +160,7 @@ class DFMModel:
             device_id=self.binding_device_id,
             element_type=np.float32,
             shape=img.shape,
-            buffer_ptr=img.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(img).data_ptr(),
         )
 
         # Bind morph factor if the model supports it
@@ -174,7 +174,7 @@ class DFMModel:
                 device_id=self.binding_device_id,
                 element_type=np.float32,
                 shape=morph_factor_t.shape,
-                buffer_ptr=morph_factor_t.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(morph_factor_t).data_ptr(),
             )
 
         # Prepare output tensors and bind them

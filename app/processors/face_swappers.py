@@ -5,6 +5,7 @@ from collections import OrderedDict
 from skimage import transform as trans
 from torchvision.transforms import v2
 from app.processors.utils import faceutil
+from app.processors.utils import platform_support
 from app.processors.models_data import models_dir
 import numpy as np
 from numpy.linalg import norm as l2norm
@@ -263,7 +264,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=img.size(),
-            buffer_ptr=img.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(img).data_ptr(),
         )
 
         for name in output_names:
@@ -341,7 +342,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=img.size(),
-            buffer_ptr=img.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(img).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -391,7 +392,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=img.size(),
-            buffer_ptr=img.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(img).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -444,7 +445,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 256, 256),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_input(
             name="input_2",
@@ -452,7 +453,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 512),
-            buffer_ptr=embedding.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -562,7 +563,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 256, 256),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_input(
             name="source_embedding",
@@ -570,7 +571,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 512),
-            buffer_ptr=embedding.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -625,7 +626,7 @@ class FaceSwappers:
                 device_id=device_id,
                 element_type=np.float32,
                 shape=(1, 3, 256, 256),
-                buffer_ptr=img_tile.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(img_tile).data_ptr(),
             )
             io_binding.bind_input(
                 name="source_embedding",
@@ -633,7 +634,7 @@ class FaceSwappers:
                 device_id=device_id,
                 element_type=np.float32,
                 shape=(1, 512),
-                buffer_ptr=embedding.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
             )
             io_binding.bind_output(
                 name="output",
@@ -679,7 +680,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 128, 128),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_input(
             name="source",
@@ -687,7 +688,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 512),
-            buffer_ptr=embedding.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -744,7 +745,7 @@ class FaceSwappers:
                 device_id=device_id,
                 element_type=np.float32,
                 shape=(1, 3, 128, 128),
-                buffer_ptr=img_tile.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(img_tile).data_ptr(),
             )
             io_binding.bind_input(
                 name="source",
@@ -752,7 +753,7 @@ class FaceSwappers:
                 device_id=device_id,
                 element_type=np.float32,
                 shape=(1, 512),
-                buffer_ptr=embedding.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
             )
             io_binding.bind_output(
                 name="output",
@@ -802,7 +803,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 256, 256),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_input(
             name="source",
@@ -810,7 +811,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 512),
-            buffer_ptr=embedding.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -849,7 +850,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 512, 512),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_input(
             name="onnx::Gemm_1",
@@ -857,7 +858,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 512),
-            buffer_ptr=embedding.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -912,7 +913,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 256, 256),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_input(
             name="source",
@@ -920,7 +921,7 @@ class FaceSwappers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 512),
-            buffer_ptr=embedding.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(embedding).data_ptr(),
         )
         io_binding.bind_output(
             name=output_name,

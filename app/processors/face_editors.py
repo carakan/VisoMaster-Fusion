@@ -13,6 +13,7 @@ from torchvision.transforms import v2
 
 from app.processors.models_data import models_dir
 from app.processors.utils import faceutil
+from app.processors.utils import platform_support
 
 if TYPE_CHECKING:
     from app.processors.models_processor import ModelsProcessor
@@ -167,7 +168,7 @@ class FaceEditors:
                 device_id=self.models_processor.binding_device_id,
                 element_type=np.float32,
                 shape=tensor.size(),
-                buffer_ptr=tensor.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(tensor).data_ptr(),
             )
 
         # Bind model outputs to pre-allocated tensors.

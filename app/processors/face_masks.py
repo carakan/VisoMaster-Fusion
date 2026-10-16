@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from app.processors.external.clipseg import CLIPDensePredT
 from app.processors.models_data import models_dir
+from app.processors.utils import platform_support
 
 if TYPE_CHECKING:
     from app.processors.models_processor import ModelsProcessor
@@ -1228,7 +1229,7 @@ class FaceMasks:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 256, 256),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -1505,7 +1506,7 @@ class FaceMasks:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=image.size(),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="out_mask:0",
@@ -1553,7 +1554,7 @@ class FaceMasks:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=image_tensor.shape,
-            buffer_ptr=image_tensor.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image_tensor).data_ptr(),
         )
         io_binding.bind_output(
             name=output_name,

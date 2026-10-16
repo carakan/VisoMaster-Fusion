@@ -4,7 +4,8 @@ import torch
 import numpy as np
 from torchvision.transforms import v2
 from skimage import transform as trans
-import kornia.geometry.transform as kgm
+from app.processors.utils import platform_support
+from app.processors.utils import faceutil
 
 if TYPE_CHECKING:
     from app.processors.models_processor import ModelsProcessor
@@ -147,7 +148,7 @@ class FaceRestorers:
             )
 
             # Kornia allocates a new tensor here, so we own this memory space.
-            temp = kgm.warp_affine(
+            temp = faceutil.warp_affine(
                 img_b.to(dtype=torch.float32, non_blocking=True),
                 M_tensor,
                 dsize=(512, 512),
@@ -302,7 +303,7 @@ class FaceRestorers:
             out_b = outpred.unsqueeze(0) if outpred.dim() == 3 else outpred
             dsize = (swapped_face_upscaled.shape[1], swapped_face_upscaled.shape[2])
 
-            outpred = kgm.warp_affine(
+            outpred = faceutil.warp_affine(
                 out_b,
                 M_inv_tensor,
                 dsize=(dsize[0], dsize[1]),
@@ -354,7 +355,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=tuple(image_input_tensor.shape),
-            buffer_ptr=image_input_tensor.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image_input_tensor).data_ptr(),
         )
         io_binding.bind_output(
             name=output_name,
@@ -407,7 +408,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=tuple(latent_input_tensor.shape),
-            buffer_ptr=latent_input_tensor.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(latent_input_tensor).data_ptr(),
         )
         io_binding.bind_output(
             name=output_name,
@@ -459,7 +460,7 @@ class FaceRestorers:
             device_id=bind_device_id,
             element_type=np.float32,
             shape=tuple(x_noisy_plus_lq_latent.shape),
-            buffer_ptr=x_noisy_plus_lq_latent.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(x_noisy_plus_lq_latent).data_ptr(),
         )
         io_binding.bind_input(
             name="timesteps",
@@ -467,7 +468,7 @@ class FaceRestorers:
             device_id=bind_device_id,
             element_type=np.int64,
             shape=tuple(timesteps_tensor.shape),
-            buffer_ptr=timesteps_tensor.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(timesteps_tensor).data_ptr(),
         )
         io_binding.bind_input(
             name="is_ref_flag_input",
@@ -475,7 +476,7 @@ class FaceRestorers:
             device_id=bind_device_id,
             element_type=np.bool_,
             shape=tuple(is_ref_flag_tensor.shape),
-            buffer_ptr=is_ref_flag_tensor.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(is_ref_flag_tensor).data_ptr(),
         )
         io_binding.bind_input(
             name="use_reference_exclusive_path_globally_input",
@@ -483,7 +484,7 @@ class FaceRestorers:
             device_id=bind_device_id,
             element_type=np.bool_,
             shape=tuple(use_reference_exclusive_path_globally_tensor.shape),
-            buffer_ptr=use_reference_exclusive_path_globally_tensor.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(use_reference_exclusive_path_globally_tensor).data_ptr(),
         )
 
         onnx_model_inputs = ort_session.get_inputs()
@@ -548,7 +549,7 @@ class FaceRestorers:
                 device_id=bind_device_id,
                 element_type=np.float32,
                 shape=tuple(tensor_to_bind.shape),
-                buffer_ptr=tensor_to_bind.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(tensor_to_bind).data_ptr(),
             )
 
         io_binding.bind_output(
@@ -577,7 +578,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 512, 512),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -605,7 +606,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 512, 512),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -633,7 +634,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 256, 256),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -661,7 +662,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 512, 512),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -689,7 +690,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 1024, 1024),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -717,7 +718,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 2048, 2048),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="output",
@@ -744,7 +745,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=(1, 3, 512, 512),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         w = np.array([fidelity_weight_value], dtype=np.double)
         io_binding.bind_cpu_input("w", w)
@@ -782,7 +783,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=image.size(),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_input(
             name="fidelity_ratio",
@@ -790,7 +791,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=fidelity_ratio.size(),
-            buffer_ptr=fidelity_ratio.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(fidelity_ratio).data_ptr(),
         )
         io_binding.bind_output(
             "enc_feat",
@@ -832,7 +833,7 @@ class FaceRestorers:
             device_id=self.models_processor.binding_device_id,
             element_type=np.float32,
             shape=image.size(),
-            buffer_ptr=image.data_ptr(),
+            buffer_ptr=platform_support.ort_ready(image).data_ptr(),
         )
         io_binding.bind_output(
             name="2359",

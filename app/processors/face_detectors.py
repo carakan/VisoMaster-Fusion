@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from app.processors.workers.function_worker import FunctionWorker
 
 from app.processors.utils import faceutil
+from app.processors.utils import platform_support
 
 try:
     from app.processors.external.yolox.tracker.byte_tracker import BYTETracker
@@ -838,7 +839,7 @@ class FaceDetectors:
                 device_id=self.models_processor.binding_device_id,
                 element_type=np.float32,
                 shape=aimg.size(),
-                buffer_ptr=aimg.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(aimg).data_ptr(),
             )
             for i in [
                 "448",
@@ -1032,7 +1033,7 @@ class FaceDetectors:
                 device_id=self.models_processor.binding_device_id,
                 element_type=np.float32,
                 shape=aimg.size(),
-                buffer_ptr=aimg.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(aimg).data_ptr(),
             )
             for name in output_names:
                 io_binding.bind_output(
@@ -1219,7 +1220,7 @@ class FaceDetectors:
                 device_id=self.models_processor.binding_device_id,
                 element_type=np.float32,
                 shape=aimg_prepared.size(),  # Use shape of prepared tensor
-                buffer_ptr=aimg_prepared.data_ptr(),  # Use data_ptr of prepared tensor
+                buffer_ptr=platform_support.ort_ready(aimg_prepared).data_ptr(),  # Use data_ptr of prepared tensor
             )
             io_binding.bind_output(
                 "output0",
@@ -1430,7 +1431,7 @@ class FaceDetectors:
                 device_id=self.models_processor.binding_device_id,
                 element_type=np.float32,
                 shape=aimg_prepared.size(),
-                buffer_ptr=aimg_prepared.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(aimg_prepared).data_ptr(),
             )
             io_binding.bind_output(
                 "output0",
@@ -1571,7 +1572,7 @@ class FaceDetectors:
                 device_id=self.models_processor.binding_device_id,
                 element_type=np.float32,
                 shape=aimg_prepared.size(),
-                buffer_ptr=aimg_prepared.data_ptr(),
+                buffer_ptr=platform_support.ort_ready(aimg_prepared).data_ptr(),
             )
             io_binding.bind_output(
                 "output0",
@@ -1709,7 +1710,7 @@ class FaceDetectors:
                 device_id=self.models_processor.binding_device_id,
                 element_type=np.float32,
                 shape=aimg_prepared.size(),  # Use shape of prepared tensor
-                buffer_ptr=aimg_prepared.data_ptr(),  # Use data_ptr of prepared tensor
+                buffer_ptr=platform_support.ort_ready(aimg_prepared).data_ptr(),  # Use data_ptr of prepared tensor
             )
             for name in output_names:
                 io_binding.bind_output(
