@@ -11,7 +11,6 @@ import torch.nn.functional as F
 from torchvision.transforms import v2
 import kornia.enhance as ke
 import kornia.color as kc
-import kornia.geometry.transform as kgm
 
 from app.processors.utils import faceutil
 from app.processors.utils import platform_support
@@ -638,7 +637,7 @@ class PipelineProcessor:
             translations = torch.cat([dx_view, dy_view], dim=1)  # [1, 2, 1]
             M = torch.cat([base_M[:, :, :2], translations], dim=2)  # [1, 2, 3]
 
-            curr_bchw = kgm.warp_affine(
+            curr_bchw = faceutil.warp_affine(
                 curr_bchw,
                 M,
                 dsize=(H, W),
@@ -1241,12 +1240,17 @@ class PipelineProcessor:
         swap = self.worker.t512(output)
         return swap, prev_face
 
-    def get_border_mask(self, parameters: dict) -> tuple[torch.Tensor, torch.Tensor]:
+    def get_border_mask(self, parameters: dict, device=None) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Creates the border fade mask based on sliders, supporting independent blurs for each edge.
         Returns a tuple of (blurred_mask, sharp_mask).
         """
-        device = self.worker.models_processor.device
+        # Pure torch mask math that gets multiplied with the swap mask. The
+        # caller passes that tensor's device: the swap mask comes from an ONNX
+        # Runtime face parser and so is CPU even when the frame is on MPS, and
+        # torch.mul requires both operands to agree.
+        if device is None:
+            device = self.worker.models_processor.torch_device
 
         # Initialize base 1x128x128 mask immediately to save an unsqueeze operation
         base_mask = torch.ones((1, 128, 128), dtype=torch.float32, device=device)
@@ -2095,7 +2099,8 @@ class PipelineProcessor:
             pitch_deg,
             current_swap_h,
             current_swap_w,
-            self.worker.models_processor.device,
+            # follows the swap tensor it is multiplied with below
+            swap.device,
             parameters,
             kps_5,
             tform,
@@ -2103,7 +2108,9 @@ class PipelineProcessor:
 
         # FW-PERF-09: skip get_border_mask entirely when the toggle is off
         if parameters.get("BordermaskEnableToggle", False):
-            border_mask, border_mask_calc = self.get_border_mask(parameters)
+            border_mask, border_mask_calc = self.get_border_mask(
+                parameters, device=side_mask.device
+            )
             if (
                 border_mask.shape[1] != current_swap_h
                 or border_mask.shape[2] != current_swap_w
@@ -2124,7 +2131,9 @@ class PipelineProcessor:
         swap_mask = torch.ones(
             (1, current_swap_h, current_swap_w),
             dtype=torch.float32,
-            device=self.worker.models_processor.device,
+            # same device as the tensor it masks: swap_mask is combined with
+            # border_mask and swap, and torch.mul needs all three to agree
+            device=swap.device,
         )
         swap_mask_noFP = border_mask.clone()
         # CORE STATS MASKS (Hard edges, inner face isolation only)
@@ -3484,6 +3493,8 @@ class PipelineProcessor:
             swap = t512_mask(swap)
             swap_mask = t512_mask(swap_mask)
 
+            print(f"[dbg] pre-mul mask dev={swap_mask.device} dtype={swap_mask.dtype} "
+                  f"min={swap_mask.min():.4f} max={swap_mask.max():.4f} mean={swap_mask.mean():.4f}", flush=True)
         swap = torch.mul(swap, swap_mask)
 
         # --- VIEW MODES ---
@@ -3548,7 +3559,7 @@ class PipelineProcessor:
         dsize = (img.shape[1], img.shape[2])
 
         # Warp the 512x512 face and mask directly into the full frame space
-        swap_full = kgm.warp_affine(
+        swap_full = faceutil.warp_affine(
             swap.unsqueeze(0).float(),
             M_inv,
             dsize=dsize,
@@ -3556,7 +3567,7 @@ class PipelineProcessor:
             padding_mode="zeros",
             align_corners=True,
         ).squeeze(0)
-        swap_mask_full = kgm.warp_affine(
+        swap_mask_full = faceutil.warp_affine(
             swap_mask.unsqueeze(0).float(),
             M_inv,
             dsize=dsize,
@@ -3580,7 +3591,7 @@ class PipelineProcessor:
             ]:
                 if _mask_512 is not None:
                     _mf = (
-                        kgm.warp_affine(
+                        faceutil.warp_affine(
                             _mask_512.unsqueeze(0).unsqueeze(0).float(),
                             M_inv,
                             dsize=dsize,

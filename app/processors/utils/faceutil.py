@@ -11,7 +11,6 @@ import threading
 import torchvision
 from torchvision.transforms import v2
 
-import kornia.geometry.transform as kgm
 import kornia.color as kc
 
 torchvision.disable_beta_transforms_warning()
@@ -217,6 +216,107 @@ def pad_image_by_size(img, image_size):
     return img
 
 
+def _invert_homography_3x3(m: torch.Tensor) -> torch.Tensor:
+    """Invert a batch of 3x3 matrices via the adjugate, on any device.
+
+    Kornia's ``normalize_homography`` and ``warp_affine`` each call
+    ``torch.linalg.inv``, which aborts on MPS in this local torch 2.14.1 build
+    ("SC compilation failure / call to an undefined label"). The adjugate is the
+    same arithmetic written out with plain multiply/add, so it works on MPS, CPU
+    and CUDA alike.
+    """
+    a, b, c = m[:, 0, 0], m[:, 0, 1], m[:, 0, 2]
+    d, e, f = m[:, 1, 0], m[:, 1, 1], m[:, 1, 2]
+    g, h, i = m[:, 2, 0], m[:, 2, 1], m[:, 2, 2]
+
+    adj = torch.stack(
+        [
+            e * i - f * h, c * h - b * i, b * f - c * e,
+            f * g - d * i, a * i - c * g, c * d - a * f,
+            d * h - e * g, b * g - a * h, a * e - b * d,
+        ],
+        dim=-1,
+    ).reshape(*m.shape)
+    det = a * adj[:, 0, 0] + b * adj[:, 1, 0] + c * adj[:, 2, 0]
+    return adj / det.unsqueeze(-1).unsqueeze(-1)
+
+
+def _normal_transform_pixel(height: int, width: int, like: torch.Tensor) -> torch.Tensor:
+    """Pixel-to-[-1,1] normalisation matrix. Mirrors Kornia's function."""
+    width_denom = 1e-14 if width == 1 else width - 1.0
+    height_denom = 1e-14 if height == 1 else height - 1.0
+    tr = torch.tensor(
+        [[2.0 / width_denom, 0.0, -1.0], [0.0, 2.0 / height_denom, -1.0], [0.0, 0.0, 1.0]],
+        device=like.device,
+        dtype=like.dtype,
+    )
+    return tr.unsqueeze(0)
+
+
+def warp_affine(
+    src: torch.Tensor,
+    M: torch.Tensor,
+    dsize,
+    mode: str = "bilinear",
+    padding_mode: str = "zeros",
+    align_corners=None,
+    **kwargs,
+) -> torch.Tensor:
+    """Kornia ``warp_affine`` without ``torch.linalg.inv``, for MPS support.
+
+    Signature and semantics match ``kornia.geometry.transform.warp_affine`` so
+    the call sites are a straight swap. Numerically it is the same transform:
+    Kornia builds a 3x3 from the 2x3 affine, normalises it between the source
+    and destination pixel grids, inverts it, then calls ``affine_grid`` and
+    ``grid_sample``. Only the two inverses differ, and both go through
+    :func:`_invert_homography_3x3`.
+
+    Kornia is unusable on MPS in the local torch 2.14.1 build -- both inverses
+    hit ``torch.linalg.inv``, which aborts with "SC compilation failure / call
+    to an undefined label". This is the single replacement for all of its warp
+    call sites in the app.
+    """
+    if align_corners is None:
+        align_corners = False
+    if mode not in ("bilinear", "nearest"):
+        raise ValueError(f"unsupported warp mode: {mode}")
+
+    # The matrix is often still a CPU tensor (it comes from skimage, or from a
+    # caller that has not moved it), while the image follows the frame onto MPS.
+    # grid_sample requires both on one device, so match the image here rather
+    # than pushing that requirement onto every call site.
+    if M.device != src.device:
+        M = M.to(src.device)
+
+    M_3x3 = torch.cat(
+        [
+            M,
+            torch.tensor([[0.0, 0.0, 1.0]], device=M.device, dtype=M.dtype).expand(
+                M.shape[0], 1, 3
+            ),
+        ],
+        dim=1,
+    )
+
+    _, _, src_h, src_w = src.shape
+    dst_h, dst_w = dsize
+
+    src_norm_trans_src_pix = _normal_transform_pixel(src_h, src_w, M)
+    src_pix_trans_src_norm = _invert_homography_3x3(src_norm_trans_src_pix)
+    dst_norm_trans_dst_pix = _normal_transform_pixel(dst_h, dst_w, M)
+    dst_norm_trans_src_norm = dst_norm_trans_dst_pix @ (M_3x3 @ src_pix_trans_src_norm)
+
+    src_norm_trans_dst_norm = _invert_homography_3x3(dst_norm_trans_src_norm)
+    grid = torch.nn.functional.affine_grid(
+        src_norm_trans_dst_norm[:, :2, :],
+        [src.shape[0], src.shape[1], dst_h, dst_w],
+        align_corners=align_corners,
+    )
+    return torch.nn.functional.grid_sample(
+        src, grid, align_corners=align_corners, mode=mode, padding_mode=padding_mode
+    )
+
+
 def transform(img, center, output_size, scale, rotation):
     """
     OPTIMIZED: GPU Warping using Kornia.
@@ -235,11 +335,10 @@ def transform(img, center, output_size, scale, rotation):
     t = t1 + t2 + t3 + t4
     M = t.params[0:2]
 
-    # Kornia GPU affine
     M_tensor = torch.from_numpy(M).float().unsqueeze(0).to(img.device)
     img_b = img.unsqueeze(0) if img.dim() == 3 else img
 
-    cropped = kgm.warp_affine(
+    cropped = warp_affine(
         img_b.float(),
         M_tensor,
         dsize=(output_size, output_size),
@@ -391,7 +490,7 @@ def warp_affine_torchvision(
     padding_mode_kgm = "border" if border_mode == "replicate" else "zeros"
 
     # Warping direct sur VRAM
-    warped_img_tensor = kgm.warp_affine(
+    warped_img_tensor = warp_affine(
         img_tensor,
         M_tensor,
         dsize=image_size,
@@ -609,7 +708,7 @@ def warp_face_by_bounding_box(img, bboxes, image_size=112):
     M_tensor = torch.from_numpy(M).float().unsqueeze(0).to(img.device)
     img_b = img.unsqueeze(0) if img.dim() == 3 else img
 
-    img_warped = kgm.warp_affine(
+    img_warped = warp_affine(
         img_b.float(),
         M_tensor,
         dsize=(image_size, image_size),
@@ -642,7 +741,7 @@ def warp_face_by_face_landmark_5(
         "nearest" if interpolation == v2.InterpolationMode.NEAREST else "bilinear"
     )
 
-    img_warped = kgm.warp_affine(
+    img_warped = warp_affine(
         img_b.float(),
         M_tensor,
         dsize=(image_size, image_size),
@@ -701,7 +800,7 @@ def warp_face_by_bounding_box_for_landmark_68(img, bbox, input_size):
     img_b = img.unsqueeze(0) if img.dim() == 3 else img
 
     crop_image = (
-        kgm.warp_affine(
+        warp_affine(
             img_b.float(),
             M_tensor,
             dsize=(input_size[1], input_size[0]),
@@ -1979,7 +2078,7 @@ def paste_back_adv(
     )
 
     # 4. Warp img_crop and mask_crop LOCALLY using Kornia (100% GPU, zero padding overhead)
-    img_warped = kgm.warp_affine(
+    img_warped = warp_affine(
         img_crop_f.unsqueeze(0),
         M_tensor.unsqueeze(0),
         dsize=(bh, bw),
@@ -1988,7 +2087,7 @@ def paste_back_adv(
         align_corners=True,
     ).squeeze(0)
 
-    mask_warped = kgm.warp_affine(
+    mask_warped = warp_affine(
         mask_crop_f.unsqueeze(0),
         M_tensor.unsqueeze(0),
         dsize=(bh, bw),
@@ -2068,7 +2167,7 @@ def transform_img_kgm(
         # Prepare the transformation matrix
     M = M[:2, :]  # Ensure it's a 2x3 matrix
 
-    img_transformed = kgm.warp_affine(
+    img_transformed = warp_affine(
         src=img.unsqueeze(0),
         M=M[None],
         dsize=(_dsize[0], _dsize[1]),

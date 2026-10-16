@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Any
 import torch
 import numpy as np
 from torchvision.transforms import v2
-import kornia.geometry.transform as kgm
 
 from app.processors.utils import faceutil
 
@@ -100,7 +99,7 @@ class FrameEdits:
         )
 
         out_b = out.unsqueeze(0) if out.dim() == 3 else out
-        out = kgm.warp_affine(
+        out = faceutil.warp_affine(
             out_b,
             M_c2o_tensor,
             dsize=(dsize[0], dsize[1]),

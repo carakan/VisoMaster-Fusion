@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from skimage import transform as trans
-import kornia.geometry.transform as kgm
 
 from torchvision.transforms import v2
 import torchvision
@@ -659,8 +658,13 @@ class FrameWorker(threading.Thread):
         # Prepare the base tensor
         img_chw = np.ascontiguousarray(img_numpy_rgb_uint8.transpose(2, 0, 1))
 
+        # The frame lives on torch_device (MPS where available) for the whole
+        # per-frame chain -- warps, masks, blending, colour -- which is where
+        # the 8x is: the frame crosses the bus once instead of once per op.
+        # Tensors that feed ONNX Runtime are moved back to .device at the
+        # binding sites, since ORT cannot dereference a Metal pointer.
         processed_tensor_rgb_uint8 = torch.from_numpy(img_chw).to(
-            self.models_processor.device
+            self.models_processor.torch_device
         )
 
         # --- ROUTING LOGIC ---
@@ -807,7 +811,7 @@ class FrameWorker(threading.Thread):
         img_b = img.unsqueeze(0) if img.dim() == 3 else img
         img_b_float = img_b.float()
 
-        original_face_512 = kgm.warp_affine(
+        original_face_512 = faceutil.warp_affine(
             img_b_float,
             M_tensor,
             dsize=(512, 512),

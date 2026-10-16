@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 import torch
 from torchvision.transforms import v2
-import kornia.geometry.transform as kgm
 
 from app.processors.models_data import landmark_point_counts
 from app.helpers.miscellaneous import (
@@ -15,6 +14,7 @@ from app.helpers.miscellaneous import (
     is_detected_face_eligible_for_matching,
     keypoints_adjustments,
 )
+from app.processors.utils import faceutil
 
 if TYPE_CHECKING:
     # Forward reference to the main FrameWorker orchestrator
@@ -1024,7 +1024,7 @@ class StandardProcessor:
         img_b = img.unsqueeze(0) if img.dim() == 3 else img
         img_b_float = img_b.float()
 
-        face_512_aligned = kgm.warp_affine(
+        face_512_aligned = faceutil.warp_affine(
             img_b_float,
             M_tensor,
             dsize=(512, 512),
