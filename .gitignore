@@ -42,3 +42,6 @@ test_frames*/
 test_videos*/
 presets/
 temp_files/
+
+# Runtime artifact written by start_visomaster.sh
+visomaster.pid

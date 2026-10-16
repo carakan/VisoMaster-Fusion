@@ -1,6 +1,7 @@
 import os
 import math
 import json
+import functools
 import subprocess
 from typing import Dict, Any, Optional, Mapping, Tuple, List
 import numpy
@@ -17,6 +18,49 @@ class FFmpegEncoder:
         self.recording_sp: Optional[subprocess.Popen] = None
         self.frames_written: int = 0
         self._source_metrics_cache: Dict[str, Dict[str, Any]] = {}
+
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _nvenc_available() -> bool:
+        """True when this ffmpeg build exposes an NVENC encoder.
+
+        hevc_nvenc and its -cq/-spatial-aq/-preset pN options only exist with an
+        NVIDIA GPU. Everywhere else (macOS, Intel without NVIDIA) ffmpeg exits
+        immediately with "Unrecognized option 'cq'" and every frame is dropped,
+        so the codec args have to fall back to software libx265.
+        """
+        try:
+            out = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout
+        except Exception:
+            return False
+        return "hevc_nvenc" in out
+
+    @staticmethod
+    def _x265_preset(nvenc_preset: Any) -> str:
+        """Map an NVENC pN preset onto libx265's vocabulary.
+
+        The SDR dropdown offers NVENC presets (p1..p7); libx265 only accepts
+        ultrafast..veryslow, so a raw "p4" would abort the encode.
+        """
+        text = str(nvenc_preset).strip().lower()
+        if text in ("ultrafast", "superfast", "veryfast", "faster", "fast",
+                    "medium", "slow", "slower", "veryslow"):
+            return text
+        # NVENC p1 is the slowest/highest quality, p7 the fastest/lowest.
+        return {
+            "p1": "slow",
+            "p2": "slow",
+            "p3": "medium",
+            "p4": "medium",
+            "p5": "fast",
+            "p6": "veryfast",
+            "p7": "superfast",
+        }.get(text, "medium")
 
     @staticmethod
     def _parse_ffprobe_fps(rate_text: Any) -> Optional[float]:
@@ -309,7 +353,7 @@ class FFmpegEncoder:
                     "-profile:v",
                     "main10",
                     "-preset",
-                    str(control.get("FFPresetsHDRSelection", "medium")),
+                    self._x265_preset(control.get("FFPresetsHDRSelection", "medium")),
                     "-pix_fmt",
                     "yuv420p10le",
                     "-x265-params",
@@ -317,34 +361,61 @@ class FFmpegEncoder:
                 ]
             )
         else:
-            args.extend(
-                [
-                    "-c:v",
-                    "hevc_nvenc",
-                    "-preset",
-                    str(control.get("FFPresetsSDRSelection", "p4")),
-                    "-profile:v",
-                    "main10",
-                    "-cq",
-                    str(ffquality),
-                    "-pix_fmt",
-                    "yuv420p10le",
-                    "-colorspace",
-                    "rgb",
-                    "-color_primaries",
-                    "bt709",
-                    "-color_trc",
-                    "bt709",
-                    "-spatial-aq",
-                    str(int(control.get("FFSpatialAQToggle", 0))),
-                    "-temporal-aq",
-                    str(int(control.get("FFTemporalAQToggle", 0))),
-                    "-tier",
-                    "high",
-                    "-tag:v",
-                    "hvc1",
-                ]
-            )
+            if self._nvenc_available():
+                args.extend(
+                    [
+                        "-c:v",
+                        "hevc_nvenc",
+                        "-preset",
+                        str(control.get("FFPresetsSDRSelection", "p4")),
+                        "-profile:v",
+                        "main10",
+                        "-cq",
+                        str(ffquality),
+                        "-pix_fmt",
+                        "yuv420p10le",
+                        "-colorspace",
+                        "rgb",
+                        "-color_primaries",
+                        "bt709",
+                        "-color_trc",
+                        "bt709",
+                        "-spatial-aq",
+                        str(int(control.get("FFSpatialAQToggle", 0))),
+                        "-temporal-aq",
+                        str(int(control.get("FFTemporalAQToggle", 0))),
+                        "-tier",
+                        "high",
+                        "-tag:v",
+                        "hvc1",
+                    ]
+                )
+            else:
+                # No NVENC on this machine. -cq, -spatial-aq and the pN presets
+                # are NVENC-only, so mirror the HDR branch and encode in software.
+                # NVENC's -cq and x265's -crf use the same 0(best)..51(worst) range.
+                args.extend(
+                    [
+                        "-c:v",
+                        "libx265",
+                        "-preset",
+                        self._x265_preset(control.get("FFPresetsSDRSelection", "p4")),
+                        "-profile:v",
+                        "main10",
+                        "-crf",
+                        str(ffquality),
+                        "-pix_fmt",
+                        "yuv420p10le",
+                        "-colorspace",
+                        "rgb",
+                        "-color_primaries",
+                        "bt709",
+                        "-color_trc",
+                        "bt709",
+                        "-tag:v",
+                        "hvc1",
+                    ]
+                )
 
         target_matrix = "bt2020nc" if control.get("HDREncodeToggle") else "bt709"
         scale_params = f"in_range=pc:out_range=tv:out_color_matrix={target_matrix}"
