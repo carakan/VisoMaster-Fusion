@@ -19,6 +19,7 @@ import platform
 import sys
 import threading
 
+import numpy as np
 import torch
 
 SYSTEM_PLATFORM = platform.system()
@@ -75,11 +76,32 @@ def has_neural_engine() -> bool:
     return IS_MACOS and platform.machine() == "arm64"
 
 
+def has_mps() -> bool:
+    """Whether torch can actually run on MPS.
+
+    This is a real check rather than a platform guess: it imports the optional
+    onnx2torch/torch backend and asks the driver, so a mac without a usable
+    Metal device never advertises the provider.
+    """
+    try:
+        from app.processors.utils import mps_backend
+
+        return mps_backend.mps_available()
+    except Exception:
+        return False
+
+
 def available_execution_providers() -> list:
     """Execution providers usable on this machine, best first.
 
     Always ends with ``"CPU"``, which is available everywhere and is the
     guaranteed-working fallback.
+
+    ``"MPS"`` leads on macOS when torch can reach Metal. It is not an ONNX
+    Runtime provider at all: the models listed in ``mps_backend.MPS_MODELS`` are
+    executed by the onnx2torch backend instead, which owns its own MPS device.
+    Selecting it is still the right knob, because it is what decides whether
+    those models run on the GPU at all.
 
     On Intel Macs CoreML is offered but deliberately ranked *below* CPU. Measured
     on an i7-9750H / Radeon Pro 5300M across the per-frame hot path
@@ -91,6 +113,8 @@ def available_execution_providers() -> list:
     Engine and a very different profile, so CoreML leads there.
     """
     providers = []
+    if has_mps():
+        providers.append("MPS")
     if has_cuda():
         if has_tensorrt():
             providers.extend(["TensorRT", "TensorRT-Engine"])
@@ -108,6 +132,18 @@ def default_execution_provider() -> str:
     return available_execution_providers()[0]
 
 
+def onnxruntime_fallback_provider() -> str:
+    """Best ONNX Runtime provider for the models that stay on ORT.
+
+    Needed when the chosen provider is ``"MPS"``: MPS is not an ORT provider, so
+    the models the onnx2torch backend does not cover still need a real EP list.
+    """
+    for provider in available_execution_providers():
+        if provider != "MPS":
+            return provider
+    return "CPU"
+
+
 def torch_device_for_provider(provider_name: str, gpu_id: int = 0) -> tuple:
     """Map a provider name to ``(device, device_type)`` for torch tensors.
 
@@ -117,13 +153,16 @@ def torch_device_for_provider(provider_name: str, gpu_id: int = 0) -> tuple:
     """
     if provider_name in ("TensorRT", "TensorRT-Engine", "CUDA"):
         return f"cuda:{gpu_id}", "cuda"
-    if provider_name == "CoreML":
-        # Torch stays on CPU even though MPS exists. The inference path binds
-        # torch tensors straight into ONNX Runtime via io_binding
+    if provider_name in ("CoreML", "MPS"):
+        # Torch stays on CPU for both, and for the same reason. The inference
+        # path binds torch tensors straight into ONNX Runtime via io_binding
         # (device_type=..., buffer_ptr=tensor.data_ptr()). ORT has no "mps"
         # device and cannot dereference a Metal buffer pointer, so an MPS tensor
         # would be bound as garbage. CoreML still runs the model itself on the
-        # GPU/Neural Engine — only the pre/post-processing is CPU-side.
+        # GPU/Neural Engine, and MPS runs it through the onnx2torch backend
+        # which allocates its own tensors -- only the pre/post-processing and
+        # the models still on ORT are CPU-side. The model execution moves to the
+        # GPU; the torch tensors do not have to.
         return "cpu", "cpu"
     return "cpu", "cpu"
 
@@ -136,6 +175,60 @@ def default_torch_device() -> str:
     provider can bind them.
     """
     return torch_device_for_provider(default_execution_provider())[0]
+
+
+_TORCH_DEVICE_ENV = "VISOMASTER_TORCH_DEVICE"
+
+
+def torch_processing_device() -> str:
+    """Device for the pipeline's own torch work: warps, masks, blending, colour.
+
+    NOT ``torch_device_for_provider``. Those tensors are pure torch and never
+    reach ONNX Runtime, so unlike the ones bound through ``io_binding`` they are
+    free to live on the GPU.
+
+    Returns ``"cpu"`` unless ``VISOMASTER_TORCH_DEVICE=mps`` is set explicitly.
+    That is deliberate, not an oversight. Chaining a frame's torch work on MPS
+    measured 219.8 ms -> 26.9 ms at 1080p on this machine, so the speedup is
+    real, but the output has not yet been shown equivalent: with the frame on
+    MPS the swapped face comes back dark (mean 50 vs 122 on CPU in the face ROI)
+    and the first swap of a run reads all zeros. A silently wrong face is worse
+    than no speedup, so this stays opt-in until the numbers match.
+
+    The per-op microbenchmarks are misleading and do not argue either way --
+    interpolate measured 0.19x and sigmoid 0.29x on MPS, i.e. slower, because
+    each paid a host-to-device copy of the whole frame for a single op. Chained,
+    with the frame resident on the GPU, the transfer is paid once per frame.
+
+    Two MPS gaps had to be closed for this path to run at all, both from the
+    same broken Metal kernel family as conv3d and SDPA prefill in the local
+    torch 2.14.1 build ("SC compilation failure / call to an undefined label"):
+    ``torch.linalg.inv`` and ``torch.linalg.det``. See ``faceutil.warp_affine``.
+    """
+    forced = os.environ.get(_TORCH_DEVICE_ENV, "").strip().lower()
+    if forced in ("cpu", "mps"):
+        return forced
+    return "cpu"
+
+
+def ort_ready(tensor):
+    """A buffer safe to hand to ONNX Runtime through ``io_binding``.
+
+    ``bind_input`` is given a raw ``buffer_ptr`` and no way to check it, so a
+    Metal pointer reaching it is silent corruption rather than an error. Call
+    this on anything derived from the pipeline frame before it is bound.
+
+    Accepts numpy arrays too -- those are already CPU, but they also expose
+    ``data_ptr()`` and so show up at the same binding sites.
+
+    On a torch tensor that is already on CPU this is a contiguity no-op, which
+    ORT needs regardless.
+    """
+    if not hasattr(tensor, "device"):  # numpy array: already host memory
+        return np.ascontiguousarray(tensor)
+    if tensor.device.type == "cpu":
+        return tensor if tensor.is_contiguous() else tensor.contiguous()
+    return tensor.detach().cpu().contiguous()
 
 
 def supports_fp16(device_type: str) -> bool:

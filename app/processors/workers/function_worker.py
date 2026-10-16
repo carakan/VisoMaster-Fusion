@@ -7,6 +7,7 @@ import threading
 
 
 # --- Internal Sub-Processor Imports ---
+from app.processors.utils import mps_backend
 from app.processors.face_detectors import FaceDetectors
 from app.processors.face_landmark_detectors import FaceLandmarkDetectors
 from app.processors.face_masks import FaceMasks
@@ -228,6 +229,13 @@ class FunctionWorker:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        if torch.backends.mps.is_available():
+            # onnx2torch's converted graph modules live in a module-level cache
+            # and hold real Metal memory, so unloading the sessions above is not
+            # enough -- without dropping the cache the bar would barely move and
+            # the button would look broken. Costs a re-conversion on next use.
+            mps_backend.clear_cache()
+            torch.mps.empty_cache()
 
         print("[INFO] GPU Memory Cleared.")
 

@@ -35,6 +35,7 @@ from torchvision.transforms import v2
 
 from app.processors.utils import faceutil
 from app.processors.utils import platform_support
+from app.processors.utils import mps_backend
 
 from PySide6 import QtCore
 
@@ -167,6 +168,15 @@ class ModelsProcessor(QtCore.QObject):
         self.gpu_id = getattr(main_window, "gpu_id", 0)
         device = device or platform_support.default_torch_device()
         self.provider_name = platform_support.default_execution_provider()
+        self.onnxruntime_provider_name = (
+            platform_support.onnxruntime_fallback_provider()
+            if self.provider_name == "MPS"
+            else self.provider_name
+        )
+        # Device for the pipeline's own torch work, which is separate from the
+        # one below: see platform_support.torch_processing_device. Anything that
+        # reaches ORT through io_binding must stay on self.device.
+        self.torch_device = platform_support.torch_processing_device()
 
         # NOTE: internal_deep_copied_kv_map / internal_kv_map_source_filename were
         # placeholder attributes for a planned per-session KV-map cache.  They are
@@ -748,6 +758,13 @@ class ModelsProcessor(QtCore.QObject):
                     print(
                         f"[INFO] Skipped loading: {model_name} is already loaded in memory (post-probe check)."
                     )
+                    # Still make sure the Inswapper identity map is in place.
+                    # FaceSwapper._ensure_emap() calls load_model() precisely
+                    # when emap is missing, and without this that call returns
+                    # here without ever extracting it, so one failed extraction
+                    # would leave swapping dead until the app restarted.
+                    if model_name == "Inswapper128":
+                        self._extract_inswapper_emap()
                     return self.models.get(model_name)
 
                 if session_options is None:
@@ -756,11 +773,34 @@ class ModelsProcessor(QtCore.QObject):
                 # Force log_severity_level to 3 (ERROR) for the actual load as well, to suppress non-critical warnings from ONNX Runtime that can clutter the console.
                 session_options.log_severity_level = 3
 
-                model_instance = onnxruntime.InferenceSession(
-                    onnx_path,
-                    sess_options=session_options,
-                    providers=model_providers,
-                )
+                model_instance = None
+                # MPS fast path. ONNX Runtime has no MPS provider, so the
+                # swappers -- the most expensive models in the pipeline -- would
+                # otherwise run on the CPU. For the models in mps_backend's
+                # allowlist, converting the graph with onnx2torch and running it
+                # on MPS measured 4-16x faster than the CoreML provider; the
+                # small embedders are deliberately excluded because CoreML wins
+                # there. If anything about the conversion fails, fall back to
+                # ONNX Runtime rather than failing the load.
+                if mps_backend.should_use_mps(model_name, onnx_path):
+                    try:
+                        model_instance = mps_backend.TorchInferenceSession(onnx_path)
+                        print(
+                            f"[MPS Backend] {model_name}: running on MPS via onnx2torch"
+                        )
+                    except Exception as exc:
+                        print(
+                            f"[MPS Backend] {model_name}: conversion failed "
+                            f"({type(exc).__name__}: {exc}); falling back to ONNX Runtime"
+                        )
+                        model_instance = None
+
+                if model_instance is None:
+                    model_instance = onnxruntime.InferenceSession(
+                        onnx_path,
+                        sess_options=session_options,
+                        providers=model_providers,
+                    )
 
                 # This ensures the CUDA context is synchronized after a new TRT
                 # engine build, before we try to load it.
@@ -779,24 +819,18 @@ class ModelsProcessor(QtCore.QObject):
                         self.models_pending_build.add(model_name)
 
                 self.models[model_name] = model_instance
-                print(
-                    f"[INFO] Loading model: {model_name} with provider: {self.provider_name}"
-                )
+                if isinstance(model_instance, mps_backend.TorchInferenceSession):
+                    # "MPS" as a provider only routes mps_backend.MPS_MODELS to
+                    # the GPU; everything else stays on ONNX Runtime, so report
+                    # what this model actually got rather than the global choice.
+                    backend = "MPS (onnx2torch)"
+                else:
+                    # Likewise "MPS" is not an ORT provider -- these sessions ran
+                    # on the provider MPS borrowed as its fallback.
+                    backend = self.onnxruntime_provider_name
+                print(f"[INFO] Loading model: {model_name} with provider: {backend}")
                 if model_name == "Inswapper128":
-                    graph = onnx.load(self.models_path[model_name]).graph
-                    emap_initializer = None
-                    for initializer in graph.initializer:
-                        if initializer.name == "emap":
-                            emap_initializer = initializer
-                            break
-
-                    if emap_initializer:
-                        self.emap = onnx.numpy_helper.to_array(emap_initializer)
-                    else:
-                        self.emap = onnx.numpy_helper.to_array(graph.initializer[-1])
-                    # MP-17: release large ONNX graph object after emap extraction
-                    del graph
-                    gc.collect()
+                    self._extract_inswapper_emap()
                 return model_instance
 
             except Exception:
@@ -1186,8 +1220,16 @@ class ModelsProcessor(QtCore.QObject):
         """
         Returns GPU memory usage as ``(used_MB, total_MB)``.
 
-        Queries nvidia-smi for accuracy; falls back to ``torch.cuda`` device properties
-        if nvidia-smi is unavailable.  Returns ``(0, 0)`` when no GPU is detected.
+        NVIDIA is read via nvidia-smi. Apple Silicon and Intel Macs with a
+        discrete GPU run torch on MPS, which has no nvidia-smi and no CUDA, so
+        both fall through to ``torch.mps``: ``driver_allocated_memory`` is what
+        Metal actually holds and ``recommended_max_memory`` is the budget torch
+        is willing to let the process use. Returns ``(0, 0)`` only when no
+        accelerator is present at all.
+
+        The total matters for more than a label: the progress bar sets its
+        maximum to it, and a Qt progress bar with minimum == maximum renders as
+        an indeterminate busy spinner rather than a filled bar.
         """
         # MP-13: use a single nvidia-smi call for both total and free memory
         try:
@@ -1201,16 +1243,28 @@ class ModelsProcessor(QtCore.QObject):
             memory_used = memory_total_val - memory_free_val
             return memory_used, memory_total_val
         except Exception:
-            # Fallback to torch.cuda if nvidia-smi is unavailable
-            if torch.cuda.is_available():
-                props = torch.cuda.get_device_properties(self.gpu_id)
-                memory_total_val = props.total_memory // (1024 * 1024)
-                memory_free_val = (
-                    props.total_memory - torch.cuda.memory_reserved(self.gpu_id)
-                ) // (1024 * 1024)
-                memory_used = memory_total_val - memory_free_val
-                return memory_used, memory_total_val
-            return 0, 0
+            pass
+
+        if torch.backends.mps.is_available():
+            try:
+                used = torch.mps.driver_allocated_memory() // (1024 * 1024)
+                total = torch.mps.recommended_max_memory() // (1024 * 1024)
+                # driver_allocated_memory can briefly exceed the recommendation
+                # during a transient spike; keep the bar from overflowing.
+                return int(used), int(max(total, used))
+            except Exception:
+                return 0, 0
+
+        # Fallback to torch.cuda if nvidia-smi is unavailable
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(self.gpu_id)
+            memory_total_val = props.total_memory // (1024 * 1024)
+            memory_free_val = (
+                props.total_memory - torch.cuda.memory_reserved(self.gpu_id)
+            ) // (1024 * 1024)
+            memory_used = memory_total_val - memory_free_val
+            return memory_used, memory_total_val
+        return 0, 0
 
     def _default_providers(self) -> list:
         """ONNX Runtime provider list matching this machine's best provider."""
@@ -1234,11 +1288,50 @@ class ModelsProcessor(QtCore.QObject):
             case _:
                 return ["CPUExecutionProvider"]
 
+    def _extract_inswapper_emap(self) -> None:
+        """Pull the Inswapper identity map out of the graph and cache it.
+
+        Kept separate from load_model because it has to run even when the session
+        is already cached -- FaceSwapper._ensure_emap() recovers a missing emap by
+        calling load_model(), which otherwise short-circuits on the cached session.
+        """
+        graph = onnx.load(self.models_path["Inswapper128"]).graph
+        emap_initializer = None
+        for initializer in graph.initializer:
+            if initializer.name == "emap":
+                emap_initializer = initializer
+                break
+
+        if emap_initializer:
+            self.emap = onnx.numpy_helper.to_array(emap_initializer)
+        else:
+            self.emap = onnx.numpy_helper.to_array(graph.initializer[-1])
+        # MP-17: release large ONNX graph object after emap extraction
+        del graph
+        gc.collect()
+
     def update_provider_configuration(self, provider_name: str) -> str:
         """
         Updates the internal device and provider lists.
         Called exclusively by the FunctionWorker after it safely unloads active models.
         """
+        requested = provider_name
+
+        if provider_name == "MPS":
+            if not platform_support.has_mps():
+                raise RuntimeError(
+                    "MPS execution was requested but torch cannot reach a Metal "
+                    "device on this machine."
+                )
+            # MPS is not an ONNX Runtime provider. The models the onnx2torch
+            # backend covers run on it (app/processors/utils/mps_backend.py,
+            # which owns its own device); everything else still needs a real EP
+            # list, so the rest of the match below runs against the best provider
+            # this machine has besides MPS. torch stays on CPU either way -- see
+            # platform_support.torch_device_for_provider for why an MPS tensor
+            # cannot be bound into ORT.
+            provider_name = platform_support.onnxruntime_fallback_provider()
+
         match provider_name:
             case "TensorRT" | "TensorRT-Engine":
                 if not TENSORRT_AVAILABLE or trt is None:
@@ -1299,5 +1392,16 @@ class ModelsProcessor(QtCore.QObject):
                 raise ValueError(f"Unknown provider: {provider_name}")
 
         self.providers = providers
-        self.provider_name = provider_name
+        # Keep the name the user actually chose: a "TensorRT-Engine" request
+        # downgrades to "TensorRT", and "MPS" borrows another provider's EP list,
+        # but neither should make the app report a provider that was never
+        # selected.
+        self.provider_name = requested
+        # The provider the models still on ONNX Runtime actually run on. Differs
+        # from provider_name when "MPS" is selected, since MPS is not an ORT
+        # execution provider and borrows another provider's EP list.
+        self.onnxruntime_provider_name = provider_name
+        # Follow an explicit override if one is set, otherwise re-derive, so a
+        # provider change does not silently strand the pipeline on the old device.
+        self.torch_device = platform_support.torch_processing_device()
         return self.provider_name
