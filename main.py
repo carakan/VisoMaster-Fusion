@@ -49,10 +49,14 @@ def _run_app() -> None:
     captured by the outer try/except (otherwise a top-level import error would
     bypass the crash-log writer)."""
     from app.ui import main_ui
-    from PySide6 import QtWidgets
+    from PySide6 import QtWidgets, QtGui
 
     import qdarktheme
     from app.ui.core.proxy_style import ProxyStyle
+
+    # Next to main.py, so it resolves whether launched from the repo or from a
+    # bundle whose launcher chdir's here.
+    _ICON_FILE = Path(__file__).resolve().parent / "app" / "ui" / "core" / "media" / "visomaster_small.png"
 
     parser = argparse.ArgumentParser(description="VisoMaster")
     parser.add_argument(
@@ -64,6 +68,17 @@ def _run_app() -> None:
     args, remaining = parser.parse_known_args()
 
     app = QtWidgets.QApplication(remaining)
+
+    # Launched as `python main.py`, macOS labels the dock icon "Python" with a
+    # generic interpreter glyph. These are what Qt puts in the dock tooltip and
+    # task switcher; the dock *image* still comes from the .app bundle, so run
+    # VisoMaster Fusion.app (see make_app_bundle.sh) for the full effect.
+    app.setApplicationName("VisoMaster Fusion")
+    app.setApplicationDisplayName("VisoMaster Fusion")
+    app.setOrganizationName("VisoMaster")
+    _icon = QtGui.QIcon(str(_ICON_FILE)) if _ICON_FILE.is_file() else QtGui.QIcon()
+    if not _icon.isNull():
+        app.setWindowIcon(_icon)
     app.setStyle(ProxyStyle())
     with open("app/ui/styles/true_dark_styles.qss", "r") as f:
         _style = f.read()
