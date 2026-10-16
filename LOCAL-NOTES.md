@@ -152,12 +152,38 @@ work at 1080p measured 219.8 ms on CPU vs 26.9 ms on MPS (8.15x). Do NOT judge t
 from single-op microbenchmarks: interpolate measured 0.19x and sigmoid 0.29x on
 MPS, because each paid a host-to-device copy of the whole frame for one op.
 
-**It is off by default.** `VISOMASTER_TORCH_DEVICE=mps` turns it on. The output
-was not shown equivalent: with the frame on MPS the swapped face comes back dark
-(mean 50 vs 122 on CPU over the face ROI) and the *first* swap of a run reads all
-zeros while later ones are correct. Detection, landmark and the Inswapper session
-itself all matched CPU exactly, so the loss is between the swapper output and the
-composite — not yet localised. A silently wrong face is worse than no speedup.
+**Leave it off. Do not set `VISOMASTER_TORCH_DEVICE=mps`.** Two separate
+problems, both local to this machine:
+
+1. *Wrong output.* Swapper and mask output buffers were allocated with
+   `torch.empty_like(<frame tensor>)`, so on MPS they inherited the frame's
+   device and reached `io_binding` as `buffer_ptr`. The MPS backend fills those
+   by rebuilding a numpy view over the pointer, and an MPS tensor's
+   `data_ptr()` is the `MTLBuffer` *object* address here, not graphics memory —
+   so the write landed on the Objective-C heap. That is the dark face (mean 50
+   vs 122 on CPU over the face ROI) and the *first* swap of a run reading all
+   zeros. Separately, `bincount`, `cumsum`, `nonzero`, `masked_select`, boolean
+   mask indexing and bool `.sum()` have no working Metal kernel at all, which
+   aborts colour transfer with "SC compilation failure".
+
+2. *Segfault.* The worker pool runs several FrameWorkers and this torch
+   build's MPS backend does not survive that. A thread doing `conv2d` plus an
+   `.item()` sync survives alone and dies with SIGSEGV at two or more, with no
+   Python traceback — it takes the whole app down mid-render. Locking
+   `torch.mps.synchronize` does not help, and holding one lock across the whole
+   frame does fix it but then serialises every thread, so it is no faster than
+   staying on CPU.
+
+The output bugs are fixed on the `visomaster-mps-wip` branch and are
+bit-identical to CPU here, but they are not on `master` because the segfault
+makes the path unusable regardless. A silently wrong face — or a dead app — is
+worse than no speedup.
+
+Note separately: thread count dominates this workload. At 512x512 the same
+frame measured 1519 ms/frame with 4 worker threads, 777 ms with 2 and 488 ms
+with 1. Lowering `nThreadsSlider` is a ~3x win with no risk, and unlike the MPS
+path it costs nothing in correctness. 4 is the shipped default and suits CUDA
+machines; on this one it is a pessimisation.
 
 Two MPS gaps had to be closed first, both the same broken Metal kernel family as
 conv3d and SDPA prefill in the local torch build ("SC compilation failure / call
