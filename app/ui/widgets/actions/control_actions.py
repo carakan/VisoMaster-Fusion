@@ -13,6 +13,7 @@ import qdarktheme
 if TYPE_CHECKING:
     from app.ui.main_ui import MainWindow
 from app.processors.utils import platform_support
+from app.processors.utils import mps_backend
 from app.ui.widgets.actions import common_actions as common_widget_actions
 
 #'''
@@ -115,11 +116,27 @@ def change_execution_provider(
             provider_widget.setCurrentText(new_provider)
 
     main_window.video_processor.stop_processing()
+
+    # "MPS" is the only provider the onnx2torch backend serves, so the provider
+    # choice is what decides whether the swappers run on the GPU. Turning it off
+    # here is what keeps the MPS_MODELS off Metal -- previously a separate
+    # toggle in Settings > General, now removed in favour of this one box.
+    mps_backend.set_backend_enabled(new_provider == "MPS")
+
     main_window.function_worker.switch_providers_priority(new_provider)
 
     # Route directly through the centralized UI memory cleaner
     # to guarantee VRAM is wiped and all dependent KV maps are safely restored.
+    #
+    # clear_gpu_memory() unchecks Swap/Edit Faces. That is right when the user is
+    # cancelling a run, but wrong here: swapping was not what the user was
+    # cancelling, so silently switching it off just makes the app look broken
+    # after a provider change. Put the buttons back as the user had them.
+    swap_was_on = main_window.swapfacesButton.isChecked()
+    edit_was_on = main_window.editFacesButton.isChecked()
     clear_gpu_memory(main_window)
+    main_window.swapfacesButton.setChecked(swap_was_on)
+    main_window.editFacesButton.setChecked(edit_was_on)
 
 
 def change_threads_number(main_window: "MainWindow", new_threads_number: int) -> None:

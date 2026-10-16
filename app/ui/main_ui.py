@@ -25,6 +25,7 @@ import app.ui.widgets.actions.control_actions as control_actions
 from app.processors.video_processor import VideoProcessor
 from app.processors.models_processor import ModelsProcessor
 from app.processors.utils import platform_support
+from app.processors.utils import mps_backend
 from app.processors.workers.function_worker import FunctionWorker
 from app.ui.widgets import widget_components
 from app.ui.widgets.event_filters import (
@@ -81,6 +82,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
     model_loading_signal = QtCore.Signal()
     model_loaded_signal = QtCore.Signal()
     display_messagebox_signal = QtCore.Signal(str, str, QtWidgets.QWidget)
+    _mps_fallback_signal = QtCore.Signal(str, str)
 
     def initialize_variables(self):
         self.video_loader_worker: ui_workers.TargetMediaLoaderWorker | None = None
@@ -216,6 +218,18 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.display_messagebox_signal.connect(
             partial(common_widget_actions.create_and_show_messagebox, self)
         )
+
+        # Surface an MPS -> CPU fallback as a toast. The backend raises this from
+        # a worker thread, so hop through a queued signal rather than touching
+        # Qt directly.
+        def _notify_mps_fallback(model_name: str, reason: str):
+            self._mps_fallback_signal.emit(model_name, reason)
+
+        self._mps_fallback_signal.connect(
+            partial(self._show_mps_fallback_toast)
+        )
+        mps_backend.set_fallback_notifier(_notify_mps_fallback)
+
         self.last_seek_read_failed = False
         self.embedding_editor_window = None
 
@@ -223,6 +237,16 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.quit_without_saving = False
 
         self._initialize_target_videos_dimension_ranges()
+
+    def _show_mps_fallback_toast(self, model_name: str, reason: str):
+        """Warn that a model left the GPU, so a slowdown is explained."""
+        common_widget_actions.create_and_show_toast_message(
+            self,
+            "Running on CPU",
+            f"{model_name} could not use the GPU and is now running on the CPU. "
+            f"This will be slower until the app is restarted.\n\n{reason}",
+            style_type="warning",
+        )
 
     def _initialize_target_videos_dimension_ranges(self):
         """Range the minimum width/height filters from 0 up to 8K UHD (7680x4320)."""
