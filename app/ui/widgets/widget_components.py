@@ -1617,6 +1617,12 @@ class InputFaceCardButton(CardButton):
         self.popMenu.addAction(self.large_thumbnails_action)
         self.popMenu.addSeparator()
 
+        self.select_all_faces_action = QtGui.QAction("Select All Faces", self)
+        self.select_all_faces_action.triggered.connect(
+            partial(list_view_actions.select_all_input_faces, self.main_window)
+        )
+        self.popMenu.addAction(self.select_all_faces_action)
+
         self.clear_all_faces_action = QtGui.QAction("Clear All Faces", self)
         self.clear_all_faces_action.triggered.connect(
             partial(list_view_actions.clear_all_input_faces, self.main_window)
@@ -1636,6 +1642,9 @@ class InputFaceCardButton(CardButton):
             self.delete_action.setEnabled(not scan_active)
             self.small_thumbnails_action.setChecked(current_face_size == (70, 70))
             self.large_thumbnails_action.setChecked(current_face_size == (96, 96))
+            self.select_all_faces_action.setEnabled(
+                bool(self.main_window.input_faces) and not scan_active
+            )
             self.clear_all_faces_action.setEnabled(
                 bool(self.main_window.input_faces) and not scan_active
             )
@@ -1649,6 +1658,7 @@ class InputFaceCardButton(CardButton):
                 "thumbnail_size_action_group",
                 "small_thumbnails_action",
                 "large_thumbnails_action",
+                "select_all_faces_action",
                 "clear_all_faces_action",
             )
 

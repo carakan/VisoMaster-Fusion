@@ -756,6 +756,34 @@ def clear_all_target_media(main_window: "MainWindow") -> bool:
     return True
 
 
+def select_all_input_faces(main_window: "MainWindow") -> None:
+    from app.ui.widgets.actions import video_control_actions
+
+    if video_control_actions.block_if_issue_scan_active(
+        main_window, "select all faces"
+    ):
+        return
+
+    if not main_window.input_faces:
+        return
+
+    target_face_button = getattr(main_window, "cur_selected_target_face_button", None)
+
+    if target_face_button:
+        target_face_button.assigned_input_faces = {
+            input_face_id: input_face_button.embedding_store
+            for input_face_id, input_face_button in main_window.input_faces.items()
+        }
+
+    for input_face_button in main_window.input_faces.values():
+        input_face_button.setChecked(True)
+
+    if target_face_button:
+        target_face_button.calculate_assigned_input_embedding()
+
+    common_widget_actions.refresh_frame(main_window)
+
+
 def clear_all_input_faces(main_window: "MainWindow") -> bool:
     from app.ui.widgets.actions import video_control_actions
 
@@ -829,6 +857,12 @@ def _build_panel_context_menu(
         clear_action.setEnabled(bool(main_window.target_videos) and not scan_active)
         clear_action.triggered.connect(partial(clear_all_target_media, main_window))
     elif panel_type == "input_faces":
+        select_action = QtGui.QAction("Select All Faces", menu)
+        select_action.setEnabled(bool(main_window.input_faces) and not scan_active)
+        select_action.triggered.connect(partial(select_all_input_faces, main_window))
+        menu.addAction(select_action)
+        menu.addSeparator()
+
         clear_action = QtGui.QAction("Clear All Faces", menu)
         clear_action.setEnabled(bool(main_window.input_faces) and not scan_active)
         clear_action.triggered.connect(partial(clear_all_input_faces, main_window))

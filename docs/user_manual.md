@@ -98,6 +98,8 @@ The main window is divided into these main areas:
 
 Load target media from a folder, individual files, or available webcams. Load source faces separately through the Input Faces area on the left. Saved embeddings can also be loaded separately. Each source face becomes a face card that can be assigned to one or more detected faces in the target media.
 
+Right-click inside the Input Faces panel (either on an empty area or on a face card) to open its context menu. **Select All Faces** checks every face card at once; when a target face is currently selected, all faces are assigned to it and the merged embedding is recalculated. **Clear All Faces** empties the panel.
+
 ---
 
 ### 3.5 Processing Pipeline Overview
