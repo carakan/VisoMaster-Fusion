@@ -798,7 +798,7 @@ SETTINGS_LAYOUT_DATA: Any = {
         "AutoLoadWorkspaceToggle": {
             "level": 1,
             "label": "Auto Load Last Workspace",
-            "default": False,
+            "default": True,
             "help": 'Do not show the "load last workspace" dialog when open then app, always load last workspace.',
         },
         "SliderMouseWheelControlToggle": {

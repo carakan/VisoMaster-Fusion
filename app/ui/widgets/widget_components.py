@@ -2247,7 +2247,7 @@ class LoadLastWorkspaceDialog(QtWidgets.QDialog):
         self.buttonBox = QtWidgets.QDialogButtonBox(QBtn)
         self.buttonBox.setCenterButtons(True)  # <-- ADD THIS LINE
         self.buttonBox.accepted.connect(self.load_workspace)
-        self.buttonBox.rejected.connect(self.reject)
+        self.buttonBox.rejected.connect(self.skip_workspace)
 
         # Create layout and add widgets
         layout = QtWidgets.QVBoxLayout()
@@ -2262,6 +2262,13 @@ class LoadLastWorkspaceDialog(QtWidgets.QDialog):
         save_load_actions.load_saved_workspace(
             self.main_window, str(self.main_window.last_workspace_path)
         )
+
+    def skip_workspace(self):
+        # Declining the load is not consent to overwrite it. Without this the
+        # defaults on screen are saved over last_workspace.json on exit and the
+        # previous configuration is gone for good.
+        self.main_window.quit_without_saving = True
+        self.reject()
 
 
 class JobLoadingDialog(QtWidgets.QDialog):

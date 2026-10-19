@@ -610,21 +610,19 @@ def load_parameters_and_settings(
 def get_auto_load_workspace_toggle(
     main_window: "MainWindow", data_filename: str | bool = False
 ):
-    if not data_filename:
-        data_filename, _ = QtWidgets.QFileDialog.getOpenFileName(
-            main_window, filter="JSON (*.json)"
-        )
-    # Check if File exists (In cases when filename is passed as function argument instead of from the file picker)
-    if isinstance(data_filename, str) and not Path(data_filename).is_file():
-        data_filename = False
-    if data_filename:
-        with open(data_filename, "r") as data_file:  # pylint: disable=unspecified-encoding
-            try:
-                data = json.load(data_file)
-            except json.JSONDecodeError:
-                return False
-            control = data["control"]
-            return control.get("AutoLoadWorkspaceToggle", False)
+    """Always auto-load the last workspace.
+
+    This used to honour a stored "AutoLoadWorkspaceToggle". Because that flag
+    was False by default, every launch raised the "load your workspace?" dialog,
+    and dismissing it left the app on defaults which then overwrote
+    last_workspace.json on exit -- so the previous configuration was silently
+    discarded on every run. Honouring the flag also let a stale False in the
+    saved file keep resurrecting the dialog.
+
+    Declining a load is now safe on its own (see LoadLastWorkspaceDialog.
+    skip_workspace), so there is nothing left to ask the user about at startup.
+    """
+    return True
 
 
 def load_saved_workspace(
