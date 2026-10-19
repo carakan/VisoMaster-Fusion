@@ -1257,16 +1257,44 @@ def get_output_file_path(
         extension = temp_path.suffix if temp_path.suffix else ""
 
     # --- Final Path Construction ---
-    output_filename = f"{output_base_name}{extension}"
-    output_file_path = os.path.join(output_folder, output_filename)
-    return output_file_path
+    # Never reuse an existing file. Recording twice with the same job name or an
+    # explicit output name would otherwise silently overwrite the first take.
+    candidate = Path(output_folder) / f"{output_base_name}{extension}"
+    if candidate.exists():
+        counter = 1
+        while True:
+            numbered = candidate.with_name(f"{candidate.stem}_{counter}{candidate.suffix}")
+            if not numbered.exists():
+                candidate = numbered
+                break
+            counter += 1
+
+    return str(candidate)
 
 
 def is_ffmpeg_in_path():
-    if not cmd_exist("ffmpeg"):
-        print("[ERROR] FFMPEG Not found in your system!")
-        return False
-    return True
+    """Locate ffmpeg.
+
+    A .app bundle launched from Finder/Dock inherits the bare system PATH
+    (/usr/bin:/bin:/usr/sbin:/sbin), which does not contain Homebrew's
+    /usr/local/bin -- so a plain shutil.which() fails for a perfectly good
+    install. Probe the usual prefixes before giving up.
+    """
+    if cmd_exist("ffmpeg"):
+        return True
+
+    for prefix in ("/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin"):
+        candidate = os.path.join(prefix, "ffmpeg")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            # Make it visible to the subprocesses that will actually invoke it,
+            # not just to this check.
+            os.environ["PATH"] = (
+                prefix + os.pathsep + os.environ.get("PATH", "")
+            )
+            return True
+
+    print("[ERROR] FFMPEG Not found in your system!")
+    return False
 
 
 def cmd_exist(cmd):
