@@ -294,6 +294,56 @@ Two traps hit while building this, both recorded in the module docstring:
 Upgrading torch still does not make the *non-converted* models GPU-accelerated —
 the restorers, segmenters and embedders above keep running on CPU/CoreML.
 
+## Yolov11 / Yolo26 face detectors (local addition)
+
+Two Ultralytics face detectors were added behind the existing `DetectorModelSelection`
+dropdown. They are **detectors only** — nothing about swapping changed, because the
+swap path consumes `bbox + kps_5` and is already detector-agnostic.
+
+Ultralytics ships YOLO11/YOLO26 pretrained on COCO, which has no "face" class, so
+neither detects faces as shipped. Both entries therefore use third-party WIDERFace
+fine-tunes from HuggingFace (AGPL-3.0, fine under this repo's GPL-3.0):
+`deepghs/yolo-face` (YOLO11n) and `poptoz/yolo26-hand-pose-face-detection` (YOLO26s).
+That second one is a personal account with no release history — it is the only
+YOLO26 *face* model that exists today. Swap it out if a better one appears.
+
+**The two exports have genuinely different output layouts**, which is why they share
+`_detect_yolo_box_only(..., output_layout=...)` rather than one decoder:
+
+| Model | `output0` | Layout | NMS |
+|---|---|---|---|
+| YOLO11n | `[1, 5, 8400]` | one-to-many, `(cx,cy,w,h,score)` | needed |
+| YOLO26s | `[1, 300, 6]` | one-to-one, `(x1,y1,x2,y2,conf,cls)` | already done |
+
+YOLO26's end-to-end head returns boxes already in xyxy, so the centre→corner
+conversion must be skipped, and the shared `_filter_detections_gpu` NMS is a no-op.
+
+**`np.asarray()` on the output *list* adds an axis.** `_run_model_with_lazy_build_check`
+returns `io_binding.copy_outputs_to_cpu()`, which is a **list**. `np.squeeze(np.asarray(outs))`
+therefore yields `(1, 1, 300, 6)` rather than `(1, 300, 6)`, and the NMS kernel rejects
+the 3-D box tensor with `boxes should be a 2d tensor`. Index `[0]` *before* `asarray`.
+The existing YOLO11/12 VR180 detectors get away with `np.squeeze` only because their
+`[1,5,N]` output happens to be unaffected by the extra leading axis.
+
+Both models emit **no landmarks**, so `_synthesize_kps_from_bboxes` places the ArcFace
+template inside each box. That is why the eye landmark lands ~19 px below RetinaFace's
+real one, and why Yolov11's swap is fractionally softer than the reference.
+
+Measured here (CPU provider, one 1920x1080 frame, median of 7):
+
+| Detector | ms |
+|---|---|
+| Yunet | 13.7 |
+| SCRFD | 21.6 |
+| Yolov11 | 34.3 |
+| RetinaFace | 35.9 |
+| Yolov8 | 35.9 |
+| Yolo26 | 65.2 |
+
+Yolo26 is the *slowest* despite skipping NMS, because the only public fine-tune is the
+**s** variant, not nano. Neither model is in `MPS_MODELS`, so both run on the ORT
+provider; adding them would need the re-measurement described above.
+
 ## Reproducing this environment
 
 ```bash

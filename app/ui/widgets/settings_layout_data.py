@@ -450,13 +450,15 @@ SETTINGS_LAYOUT_DATA: Any = {
             "options": [
                 "RetinaFace",
                 "Yolov8",
+                "Yolov11",
+                "Yolo26",
                 "SCRFD",
                 "Yunet",
                 "Yolov11 VR180",
                 "Yolov12 VR180",
             ],
             "default": "RetinaFace",
-            "help": "Select the face detection model to use for detecting faces in the input image or video. 'Yolov11 VR180' and 'Yolov12 VR180' is trained for VR180 content.",
+            "help": "Select the face detection model to use for detecting faces in the input image or video. 'Yolov11 VR180' and 'Yolov12 VR180' is trained for VR180 content. 'Yolov11' and 'Yolo26' are community WIDERFace models that output no landmarks, so the 5-point alignment set is approximated from each box.",
         },
         "DetectorScoreSlider": {
             "level": 1,

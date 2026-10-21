@@ -101,6 +101,8 @@ class FaceDetectors:
             },
             "SCRFD": {"model_name": "SCRFD2.5g", "function": self.detect_scrdf},
             "Yolov8": {"model_name": "YoloFace8n", "function": self.detect_yoloface},
+            "Yolov11": {"model_name": "YoloFace11n", "function": self.detect_yoloface11},
+            "Yolo26": {"model_name": "YoloFace26s", "function": self.detect_yolo26_face},
             "Yunet": {"model_name": "YunetN", "function": self.detect_yunet},
             "Yolov11 VR180": {
                 "model_name": "YoloFace11nVR180",
@@ -1380,6 +1382,201 @@ class FaceDetectors:
         kx = x1 + w * fx  # (N, 5)
         ky = y1 + h * fy  # (N, 5)
         return np.stack([kx, ky], axis=-1).astype(np.float32)  # (N, 5, 2)
+
+    def _detect_yolo_box_only(
+        self,
+        model_name: str,
+        output_layout: str,
+        input_size: tuple[int, int],
+        **kwargs,
+    ):
+        """
+        Shared pipeline for Ultralytics YOLO-face exports that emit boxes only
+        (no facial keypoints). 5-point landmarks are synthesised from each box via
+        `_synthesize_kps_from_bboxes` so the rest of the pipeline is unchanged.
+
+        Args:
+            model_name: registry key, used for lazy-TensorRT-build bookkeeping.
+            output_layout: "anchors" for the one-to-many head ([1, 5, N] =
+                (cx, cy, w, h, score), needs external NMS), or "end2end" for the
+                YOLO26 NMS-free head ([1, 300, 6] = (x1, y1, x2, y2, conf, cls),
+                already suppressed, boxes are xyxy).
+            input_size: (width, height) the graph was exported at.
+
+        Returns:
+            (det, kpss_5, kpss, det_scores)
+        """
+        ort_session = kwargs.get("ort_session")
+
+        img, score, rotation_angles = (
+            kwargs.get("img"),
+            kwargs.get("score"),
+            kwargs.get("rotation_angles"),
+        )
+        img_landmark = img.clone() if kwargs.get("use_landmark_detection") else None
+
+        det_img, det_scale, final_input_size = self._prepare_detection_image(
+            img, input_size, "yolo"
+        )
+
+        scores_list, bboxes_list, kpss_list = [], [], []
+        cx, cy = final_input_size[0] / 2, final_input_size[1] / 2
+
+        # Read the tensor names off the session rather than hardcoding "images"/"output0":
+        # NMS-fused graphs rename outputs, and the YOLO26 export differs from YOLO11's.
+        input_name = ort_session.get_inputs()[0].name
+        output_name = ort_session.get_outputs()[0].name
+
+        for angle in rotation_angles:
+            if angle != 0:
+                aimg, M = faceutil.transform(
+                    det_img, (cx, cy), input_size[0], 1.0, angle
+                )  # Rotates uint8
+                IM = faceutil.invertAffineTransform(M)
+            else:
+                IM, aimg = None, det_img  # aimg is uint8 CHW
+
+            # Convert to float and normalize AFTER rotation, before binding
+            aimg_prepared = aimg.to(torch.float32) / 255.0
+            aimg_prepared = torch.unsqueeze(
+                aimg_prepared, 0
+            ).contiguous()  # Add batch dim
+
+            io_binding = ort_session.io_binding()
+            io_binding.bind_input(
+                name=input_name,
+                device_type=self.models_processor.device_type,
+                device_id=self.models_processor.binding_device_id,
+                element_type=np.float32,
+                shape=aimg_prepared.size(),
+                buffer_ptr=platform_support.ort_ready(aimg_prepared).data_ptr(),
+            )
+            io_binding.bind_output(
+                output_name,
+                self.models_processor.device_type,
+                self.models_processor.binding_device_id,
+            )
+            # Run the model with lazy build handling
+            net_outs = self._run_model_with_lazy_build_check(
+                model_name, ort_session, io_binding
+            )
+
+            raw = np.asarray(net_outs[0], dtype=np.float32)
+
+            if output_layout == "end2end":
+                # [1, 300, 6] -> [300, 6]: (x1, y1, x2, y2, conf, cls). Boxes are
+                # already xyxy and the one-to-one head is NMS-free, so no NMS here.
+                # Note: copy_outputs_to_cpu() returns a list; index [0] before
+                # asarray, otherwise the list contributes an extra leading axis.
+                outputs = raw.reshape(-1, raw.shape[-1])
+                keep_indices = np.where(outputs[:, 4] > score)[0]
+                if keep_indices.size == 0:
+                    continue
+                bboxes_raw = np.ascontiguousarray(outputs[keep_indices, 0:4])
+                score_raw = np.ascontiguousarray(outputs[keep_indices, 4:5])
+            else:
+                # [1, 5, N] -> [N, 5] where columns are (cx, cy, w, h, score).
+                outputs = np.squeeze(raw).T
+                score_raw_flat = outputs[:, 4:5].flatten()
+                keep_indices = np.where(score_raw_flat > score)[0]
+                if keep_indices.size == 0:
+                    continue
+                bbox_raw = outputs[keep_indices, 0:4]
+                score_raw = outputs[keep_indices, 4:5]
+                # Convert (center_x, center_y, w, h) to (x1, y1, x2, y2)
+                bboxes_raw = np.stack(
+                    (
+                        bbox_raw[:, 0] - bbox_raw[:, 2] / 2,
+                        bbox_raw[:, 1] - bbox_raw[:, 3] / 2,
+                        bbox_raw[:, 0] + bbox_raw[:, 2] / 2,
+                        bbox_raw[:, 1] + bbox_raw[:, 3] / 2,
+                    ),
+                    axis=-1,
+                )
+
+            if angle != 0:
+                points1, points2 = (
+                    faceutil.trans_points2d(bboxes_raw[:, :2], IM),
+                    faceutil.trans_points2d(bboxes_raw[:, 2:], IM),
+                )
+                _x1, _y1, _x2, _y2 = (
+                    points1[:, 0],
+                    points1[:, 1],
+                    points2[:, 0],
+                    points2[:, 1],
+                )
+                if angle in (-270, 90):
+                    points1, points2 = (
+                        np.stack((_x1, _y2), axis=1),
+                        np.stack((_x2, _y1), axis=1),
+                    )
+                elif angle in (-180, 180):
+                    points1, points2 = (
+                        np.stack((_x2, _y2), axis=1),
+                        np.stack((_x1, _y1), axis=1),
+                    )
+                elif angle in (-90, 270):
+                    points1, points2 = (
+                        np.stack((_x2, _y1), axis=1),
+                        np.stack((_x1, _y2), axis=1),
+                    )
+                bboxes_raw = np.hstack((points1, points2))
+
+            # No keypoints in either layout — synthesise the ArcFace 5-point set.
+            kpss_raw = self._synthesize_kps_from_bboxes(bboxes_raw)
+
+            if score_raw.ndim == 1:
+                score_raw = score_raw[:, np.newaxis]
+
+            if score_raw.size > 0:
+                kpss_list.append(kpss_raw)
+                bboxes_list.append(bboxes_raw)
+                scores_list.append(score_raw)
+
+        det, kpss, score_values = self._filter_detections_gpu(
+            scores_list,
+            bboxes_list,
+            kpss_list,
+            img.shape[1],
+            img.shape[2],
+            det_scale,
+            kwargs.get("max_num"),
+        )
+        if det is None:
+            return (
+                np.empty((0, 4)),
+                np.empty((0, 5, 2)),
+                np.empty((0, 5, 2)),
+                np.empty((0,)),
+            )
+
+        return self._refine_landmarks(img_landmark, det, kpss, score_values, **kwargs)
+
+    def detect_yoloface11(self, **kwargs):
+        """
+        Runs the generic Yolov11-face detection pipeline.
+
+        Ultralytics YOLO11n fine-tuned on WIDERFace, exported with dynamic axes. Its
+        single output tensor is [1, 5, N] = (cx, cy, w, h, score) per anchor and
+        carries no facial keypoints, so the 5-point ArcFace set is synthesised from
+        each box via `_synthesize_kps_from_bboxes`.
+        """
+        return self._detect_yolo_box_only(
+            "YoloFace11n", "anchors", (640, 640), **kwargs
+        )
+
+    def detect_yolo26_face(self, **kwargs):
+        """
+        Runs the YOLO26-face detection pipeline.
+
+        Uses YOLO26's NMS-free end-to-end head: the output tensor is
+        [1, 300, 6] = (x1, y1, x2, y2, confidence, class_id) with boxes already in
+        xyxy form and no IoU suppression needed. No facial keypoints are emitted,
+        so the 5-point ArcFace set is synthesised from each box.
+        """
+        return self._detect_yolo_box_only(
+            "YoloFace26s", "end2end", (640, 640), **kwargs
+        )
 
     def detect_yoloface11_vr180(self, **kwargs):
         """

@@ -438,6 +438,28 @@ models_list = [
         "url": f"{assets_repo}/v0.1.0/yunet_n_640_640.onnx",
     },
     {
+        # Ultralytics YOLO11n fine-tuned on WIDERFace, exported with dynamic axes.
+        # Carries no facial keypoints (output0: [1,5,N] = cx,cy,w,h,score); landmarks
+        # are synthesised from the bbox downstream. Community weights (AGPL-3.0),
+        # hosted on HuggingFace rather than the project's own asset repo.
+        "model_name": "YoloFace11n",
+        "local_path": f"{models_dir}/yoloface_11n.onnx",
+        "hash": "7b4b3a098ac15a5ccd0d048e7949b63275e4a9657c374ad9e4730632d9f01829",
+        "url": "https://huggingface.co/deepghs/yolo-face/resolve/main/yolov11n-face/model.onnx",
+    },
+    {
+        # YOLO26s fine-tuned on WIDERFace, exported with the NMS-free end-to-end
+        # one-to-one head: output0 is [1,300,6] = (x1,y1,x2,y2,conf,cls), boxes already
+        # xyxy and suppressed, so no external NMS is needed. No facial keypoints, so
+        # landmarks are synthesised from the bbox downstream. Community weights
+        # (AGPL-3.0) hosted on a personal HuggingFace account, not an official
+        # Ultralytics release — Ultralytics ships no YOLO26 face model.
+        "model_name": "YoloFace26s",
+        "local_path": f"{models_dir}/yoloface_26s.onnx",
+        "hash": "fa53a029bb77f9f59166ef947d3f34775ea6bce8071aeaa422a338382a3f4708",
+        "url": "https://huggingface.co/poptoz/yolo26-hand-pose-face-detection/resolve/main/models/yolo26_face_fp32.onnx",
+    },
+    {
         # Yolov11-face trained at 960×960 for VR180 face detection. Unlike the
         # other detectors it outputs no facial keypoints (output0: [1,5,N] =
         # cx,cy,w,h,score); landmarks are synthesised from the bbox downstream.

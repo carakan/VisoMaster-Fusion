@@ -508,6 +508,12 @@ The app uses ONNX-based detectors to locate faces in each frame before swapping.
 | **SCRFD** | Sample and Computation Redistribution for Face Detection (ICLR 2022, InsightFace). Designed for an efficient accuracy-to-compute trade-off. The variant used here (SCRFD-2.5G) targets a 2.5 GFlop budget - faster than RetinaFace with competitive accuracy. |
 | **Yolov8** | A YOLOv8-based face detector (YoloFace8n). Fastest of the four options. Good choice for real-time or webcam use where speed matters more than peak accuracy. |
 | **Yunet** | A lightweight millisecond-level face detector developed by Shiqi Yu and distributed via the OpenCV Model Zoo. Very low compute footprint; well-suited to CPU inference and resource-constrained scenarios. Notable for handling side-on and partially occluded faces well. |
+| **Yolov11** | A YOLO11n face detector fine-tuned on WIDERFace. Emits no facial landmarks, so the 5-point alignment set is approximated from each bounding box - fast, with slightly softer alignment than the landmark-producing detectors. |
+| **Yolo26** | A YOLO26s face detector fine-tuned on WIDERFace. Uses YOLO26's NMS-free end-to-end head: up to 300 pre-suppressed detections per frame with no IoU post-processing, so it skips the NMS pass every other detector runs. This is the **s** (small, not nano) variant, so it is currently the *slowest* detector here - measured at roughly 65 ms/frame on CPU versus ~34 ms for Yolov11. Also landmark-less, with alignment approximated from the bounding box. |
+
+Measured single-frame latency on this machine's CPU provider, for reference when choosing: Yunet ~14 ms, SCRFD ~22 ms, Yolov11 ~34 ms, RetinaFace ~36 ms, Yolov8 ~36 ms, Yolo26 ~65 ms.
+
+**A note on the YOLO face weights.** Ultralytics publishes YOLO11 and YOLO26 pretrained on COCO, which has no "face" class - neither can detect faces as shipped. The **Yolov11** and **Yolo26** entries therefore use community WIDERFace fine-tunes downloaded from HuggingFace (`deepghs/yolo-face` and `poptoz/yolo26-hand-pose-face-detection`), licensed AGPL-3.0, rather than official Ultralytics releases. If you would rather not fetch weights from third-party accounts, leave those two options alone and use RetinaFace, SCRFD, Yolov8, or Yunet. To replace them, drop your own `yoloface_11n.onnx` / `yoloface_26s.onnx` into `model_assets/` and update the `hash` in `app/processors/models_data.py`.
 
 | Setting | Description |
 |---|---|
@@ -682,7 +688,7 @@ These settings are also related to Section 10 but are configured in the Settings
 
 | Setting | Description |
 |---|---|
-| **Face Detect Model** | Selects the active face detector: RetinaFace, SCRFD, Yolov8, or Yunet. See Section 10.1 for descriptions of each. |
+| **Face Detect Model** | Selects the active face detector: RetinaFace, SCRFD, Yolov8, Yolov11, Yolo26, or Yunet. See Section 10.1 for descriptions of each. |
 | **Detect Score** | Minimum confidence threshold for a detection to be accepted. |
 | **Max No of Faces to Detect** | Limits how many faces are processed per frame. |
 | **Auto Rotation** | Rotates the input frame to the detected face's upright orientation before processing. |
@@ -867,6 +873,7 @@ VisoMaster Fusion has two separate model optimisation processes:
 | **RetinaFace** | A single-stage face detector from the InsightFace project. The default detector in VisoMaster Fusion, with high accuracy across a wide range of face sizes and orientations. |
 | **SCRFD** | Sample and Computation Redistribution for Face Detection (ICLR 2022, InsightFace). Designed for an efficient accuracy-to-compute trade-off. The variant used here (SCRFD-2.5G) targets a 2.5 GFlop budget - faster than RetinaFace with competitive accuracy. |
 | **SimSwap** | A face swap model operating natively at 512 px. Uses SimSwapArcFace for recognition. |
+| **Yolo26** | Ultralytics' end-to-end, NMS-free object detector (released January 2026). As a face detector here it uses the one-to-one head, which returns at most 300 pre-suppressed detections per frame and skips IoU post-processing. Weights are a community WIDERFace fine-tune (the **s** variant); see Section 10.1 for latency. |
 | **TensorRT** | Nvidia's inference optimization library. When selected as the provider (Section 15.1), ONNX Runtime uses the TensorrtExecutionProvider and automatically builds an engine cache in `tensorrt-engines/` on first use. |
 | **TensorRT-Engine** | Pre-built `.trt` engine files built automatically on first use of the TensorRT-Engine provider. Bypasses ONNX Runtime entirely for supported models. Distinct from the ONNX Simplifier in the Model Optimiser (Section 16). |
 | **Virtual Camera** | A software device that presents processed video output as if it were a physical webcam. VisoMaster Fusion can route its output to a virtual camera, such as OBS Virtual Camera or v4l2loopback, allowing the swapped result to appear as a live camera source in video call or streaming applications. |
